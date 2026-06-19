@@ -3,9 +3,13 @@ pybind11>=2.9.0, <=2.10.3
 setuptools>=61.0
 wheel
 pre-commit
-nanobind>=2.5
+
 lit
 matplotlib
 # lit requires psutil to set timeouts
 psutil
 pytest
+# nanobind ABI-couples to the prebuilt mlir distro wheel (built against this
+# same version); a mismatch breaks Value-subclass recognition at runtime. Pin
+# exact and bump only alongside a distro rebuild.
+nanobind==2.12.0

@@ -4,3 +4,7 @@ dataclasses>=0.6, <=0.8
 numpy>=1.19.5, <2.0 # 2.1 would be nice for typing improvements, but it doesn't seem to work well with pyxrt
 rich
 ml_dtypes
+# nanobind ABI-couples to the prebuilt mlir distro wheel (built against this
+# same version); a mismatch breaks Value-subclass recognition at runtime. Pin
+# exact and bump only alongside a distro rebuild.
+nanobind==2.12.0

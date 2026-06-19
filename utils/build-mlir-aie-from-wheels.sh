@@ -49,7 +49,7 @@ if [ "$#" -ge 4 ]; then
   echo "PEANO_INSTALL_DIR DIR: $PEANO_INSTALL_DIR"
   export PEANO_INSTALL_DIR=${PEANO_INSTALL_DIR}
 else
-  python3 -m pip install llvm-aie -f https://github.com/Xilinx/llvm-aie/releases/expanded_assets/nightly
+  python3 -m pip install llvm-aie -f https://github.com/Xilinx/llvm-aie/releases/download/nightly/llvm_aie-21.0.0.2026061501+acc2a72c-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
   export PEANO_INSTALL_DIR="$(pip show llvm-aie | grep ^Location: | awk '{print $2}')/llvm-aie"
   echo "PEANO_INSTALL_DIR DIR: $PEANO_INSTALL_DIR"
   export PEANO_INSTALL_DIR=${PEANO_INSTALL_DIR}
