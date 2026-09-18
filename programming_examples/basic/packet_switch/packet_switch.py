@@ -78,7 +78,7 @@ def _device_for(dev_str: str):
     return from_name(dev_str, n_cols=None if dev_str == "npu2" else 1)
 
 
-@iron.jit
+@iron.jit(aiecc_flags=["--dump-intermediates"])
 def packet_switch(
     A: In,
     B: Out,
@@ -88,18 +88,23 @@ def packet_switch(
 ):
     in_out_ty = np.dtype[np.int8]
     vector_ty = np.ndarray[(in_out_size,), in_out_ty]
+    
+    larget_vector_ty = np.ndarray[ (16*1024,), in_out_ty ]
+    
+    
     # +4 bytes for the kept packet header at the memtile.
     vector_with_packet_ty = np.ndarray[(in_out_size + 4,), in_out_ty]
 
     # Pin tile coordinates to match the original placed design exactly.
     shim = Tile(col=0, row=0, tile_type=AIETileType.ShimNOCTile)
     memtile = Tile(col=0, row=1, tile_type=AIETileType.MemTile)
-    ct_0_2 = Tile(col=0, row=2, tile_type=AIETileType.CoreTile)
-    ct_0_3 = Tile(col=0, row=3, tile_type=AIETileType.CoreTile)
+    ct_0_2 = Tile(col=0, row=2, tile_type=AIETileType.CoreTile, allocation_scheme="basic-sequential")
+    ct_0_3 = Tile(col=0, row=3, tile_type=AIETileType.CoreTile, allocation_scheme="basic-sequential")
 
     # ----- Compute tile 0,2 (add) -----
-    c02_buf_in = Buffer(type=vector_ty, name="core02_buff_in")
-    c02_buf_out = Buffer(type=vector_ty, name="core02_buff_out")
+    c02_buf_in = Buffer(type=larget_vector_ty, name="core02_buff_in")
+    c02_buf_out = Buffer(type=larget_vector_ty, name="core02_buff_out")
+
     c02_prod_lock_in = Lock(tile=ct_0_2, lock_id=0, init=1, name="core02_prod_lock_in")
     c02_cons_lock_in = Lock(tile=ct_0_2, lock_id=1, init=0, name="core02_cons_lock_in")
     c02_prod_lock_out = Lock(
@@ -139,7 +144,7 @@ def packet_switch(
         "add",
         object_file_name="add_mul.o",
         source_file=_kernel_src,
-        arg_types=[vector_ty, vector_ty],
+        arg_types=[larget_vector_ty, larget_vector_ty],
     )
     mul_func = ExternalFunction(
         "mul",
@@ -215,6 +220,7 @@ def packet_switch(
                         acquires=[Acquire(c02_cons_lock_out)],
                         releases=[Release(c02_prod_lock_out)],
                         packet=(0, 4),
+                        length=in_out_size
                     ),
                 ],
             ),
