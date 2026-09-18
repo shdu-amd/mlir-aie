@@ -98,7 +98,8 @@ def packet_switch(
     # Pin tile coordinates to match the original placed design exactly.
     shim = Tile(col=0, row=0, tile_type=AIETileType.ShimNOCTile)
     memtile = Tile(col=0, row=1, tile_type=AIETileType.MemTile)
-    ct_0_2 = Tile(col=0, row=2, tile_type=AIETileType.CoreTile, allocation_scheme="basic-sequential")
+    ct_0_2 = Tile(col=0, row=2, tile_type=AIETileType.CoreTile)
+    
     ct_0_3 = Tile(col=0, row=3, tile_type=AIETileType.CoreTile, allocation_scheme="basic-sequential")
 
     # ----- Compute tile 0,2 (add) -----
@@ -208,6 +209,7 @@ def packet_switch(
                         buffer=c02_buf_in,
                         acquires=[Acquire(c02_prod_lock_in)],
                         releases=[Release(c02_cons_lock_in)],
+                        length=in_out_size                        
                     ),
                 ],
             ),
