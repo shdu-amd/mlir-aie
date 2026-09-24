@@ -11263,7 +11263,7 @@ Currently, only buffers and locks are parametrizable.</p>
 <p>Once defined, an abstract BD chain can be used elsewhere using AIEX ops in the runtime sequence.
 In the future, abstract BD chains will also be usable elsewhere, inside the static configuration.
 At its usage sites, the abstract BD chain will be concretized with the given input arguments.</p>
-<p>Traits: <code>SkipAccessibilityCheckTrait</code></p>
+<p>Traits: <code>AttrBasedSymbolVisibility</code>, <code>SkipAccessibilityCheckTrait</code>, <code>SymbolName</code></p>
 <p>Interfaces: <code>Symbol</code></p>
 <h4 id="attributes_1">Attributes:<a class="headerlink" href="#attributes_1" title="Permanent link">&para;</a></h4>
 <table>
@@ -11284,13 +11284,22 @@ At its usage sites, the abstract BD chain will be concretized with the given inp
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  %buf = aie.buffer(%tile33) : memref&lt;256xi64&gt;
 </code></pre></div>
 This operation represents a buffer in tile (3, 3) of 256 elements, each a 64-bit integer.</p>
-<p><code>mem_bank</code> pins the buffer to one memory bank of that tile. The bank-aware
-allocation scheme treats the pin as a hard constraint and reports an error
-when the bank cannot hold the buffer. The basic-sequential scheme has no
-notion of banks and ignores the pin.</p>
+<p><code>mem_bank</code> pins the buffer to one memory bank of that tile. The pin is a
+hard constraint: if the bank cannot hold the buffer, the allocator reports
+an error rather than placing it elsewhere.</p>
 <p><code>core_data</code> marks the extent that holds the core's own .data, .rodata and
 .bss, which <code>aie-assign-buffer-addresses</code> creates from the core's
-<code>data_size</code>. It names no symbol.</p>
+<code>data_size</code>. It names no symbol, and a core has at most one: the region is
+one extent.</p>
+<p><code>bank_reserved</code> marks space held in the bank named by <code>mem_bank</code> for the
+static data a kernel pins there. It too names no symbol, but unlike
+<code>core_data</code> there is one per bank the core pins to, created from the
+core's <code>measured_bank_sizes</code>.</p>
+<p><code>measured_data_ranges</code> holds the tile-relative extents a prebaked
+<code>elf_file</code> core already occupies, as address/size pairs. A compiled core
+records sizes instead, because its addresses are chosen after the measure;
+a prebaked one has them already, so the pass pins buffers around the
+extents rather than reserving room of its own.</p>
 <p>Interfaces: <code>BufferLike</code>, <code>OpAsmOpInterface</code>, <code>TileElement</code></p>
 <h4 id="attributes_2">Attributes:<a class="headerlink" href="#attributes_2" title="Permanent link">&para;</a></h4>
 <table>
@@ -11300,6 +11309,7 @@ notion of banks and ignores the pin.</p>
 <tr><td><code>initial_value</code></td><td>::mlir::ElementsAttr</td><td>constant vector/tensor attribute</td></tr>
 <tr><td><code>mem_bank</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 <tr><td><code>core_data</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
+<tr><td><code>bank_reserved</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 <tr><td><code>aligned</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
 
@@ -11451,9 +11461,24 @@ reserved for the stack.  When absent the target's default is used
 (<code>AIETargetModel::getDefaultCoreStackSize()</code>).  The stack (and other data allocations)
 are always stored in the local core memory, to avoid conflicts with static data
 allocations in other cores.</p>
-<p>The stack sits directly below the buffers with no clearance, so a <code>stack_size</code>
-below the core's use overwrites those buffers. <code>aiecc</code> measures the stack this
-core needs, writes it to the <code>measured_stack_size</code> attribute, and fails the build
+<p>Optional <code>stack_address</code> sets the tile-relative byte offset of the stack.
+Optional <code>stack_bank</code> constrains its bank; bank-aware allocation resolves a
+bank-only constraint into <code>stack_address</code>. Basic-sequential allocation
+requires an address for a bank constraint. An explicitly placed stack must
+fit entirely inside one bank, matching its bank-specific stack address space.
+Its address must satisfy the stack ABI alignment: 32 bytes on AIE1/AIE2,
+64 bytes on AIE2P/AIE2PS.
+Omitting both attributes retains legacy placement at offset zero, including
+stacks larger than one bank.</p>
+<p>Stacks outside bank A are unsupported with Chess. For Peano, moving the stack
+outside bank A requires recompiling the kernels with the matching stack
+address space; <code>aiecc</code> rejects this with ordinary precompiled <code>link_files</code>
+or deprecated core <code>link_with</code> inputs. LLVM IR merged through
+<code>link_merge_files</code> can instead be compiled with the core's stack model.</p>
+<p>By default the stack sits directly below the buffers with no clearance, so a
+<code>stack_size</code> below the core's use overwrites those buffers. <code>aiecc</code> measures
+the stack this core needs, writes it to the <code>measured_stack_size</code> attribute,
+and fails the build
 when <code>stack_size</code> is smaller. <code>aiecc</code> measures the whole live call chain. That
 chain starts above the core body: the runtime enters at <code>__start</code> (crt0), which
 calls <code>_main_init</code> (crt1), which calls the core body, which calls its kernels.
@@ -11519,15 +11544,21 @@ removed).  Specifying both <code>link_with</code> and either <code>link_files</c
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>stack_size</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose minimum value is 1</td></tr>
+<tr><td><code>stack_address</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose minimum value is 0</td></tr>
+<tr><td><code>stack_bank</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose minimum value is 0</td></tr>
 <tr><td><code>measured_stack_size</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose minimum value is 0</td></tr>
 <tr><td><code>data_size</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose minimum value is 0</td></tr>
 <tr><td><code>measured_data_size</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose minimum value is 0</td></tr>
+<tr><td><code>measured_bank_sizes</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
+<tr><td><code>measured_data_ranges</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
 <tr><td><code>link_with</code></td><td>::mlir::StringAttr</td><td>string attribute</td></tr>
 <tr><td><code>link_files</code></td><td>::mlir::ArrayAttr</td><td>string array attribute</td></tr>
 <tr><td><code>link_merge_files</code></td><td>::mlir::ArrayAttr</td><td>string array attribute</td></tr>
 <tr><td><code>elf_file</code></td><td>::mlir::StringAttr</td><td>string attribute</td></tr>
 <tr><td><code>dynamic_objfifo_lowering</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 <tr><td><code>emit_parameter_sync_preamble</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+<tr><td><code>measured_data_alignment</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose minimum value is 1</td></tr>
+<tr><td><code>measured_bank_alignments</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
 </table>
 
 <h4 id="operands_3">Operands:<a class="headerlink" href="#operands_3" title="Permanent link">&para;</a></h4>
@@ -11604,7 +11635,7 @@ operation.</p>
 <a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>  %CORE = aie.core(%tile) { ... }
 <a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>}
 </code></pre></div></p>
-<p>Traits: <code>HasDefaultDLTIDataLayout</code>, <code>HasParent&lt;mlir::ModuleOp&gt;</code>, <code>IsolatedFromAbove</code>, <code>SingleBlockImplicitTerminator&lt;EndOp&gt;</code>, <code>SingleBlock</code>, <code>SymbolTable</code></p>
+<p>Traits: <code>AttrBasedSymbolVisibility</code>, <code>HasDefaultDLTIDataLayout</code>, <code>HasParent&lt;mlir::ModuleOp&gt;</code>, <code>IsolatedFromAbove</code>, <code>SingleBlockImplicitTerminator&lt;EndOp&gt;</code>, <code>SingleBlock</code>, <code>SymbolName</code>, <code>SymbolTable</code></p>
 <p>Interfaces: <code>AIETarget</code>, <code>DataLayoutOpInterface</code>, <code>Symbol</code></p>
 <h4 id="attributes_6">Attributes:<a class="headerlink" href="#attributes_6" title="Permanent link">&para;</a></h4>
 <table>
@@ -12178,7 +12209,6 @@ Use <code>?</code> for unspecified coordinates.</p>
 <tr><td><code>tile_type</code></td><td>xilinx::AIE::AIETileTypeAttr</td><td>Type of AIE Tile</td></tr>
 <tr><td><code>col</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose minimum value is 0</td></tr>
 <tr><td><code>row</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose minimum value is 0</td></tr>
-<tr><td><code>allocation_scheme</code></td><td>::mlir::StringAttr</td><td>string attribute</td></tr>
 </table>
 
 <h4 id="results_9">Results:<a class="headerlink" href="#results_9" title="Permanent link">&para;</a></h4>
@@ -12485,7 +12515,7 @@ next one. When <code>repeat_count == 1</code>, each object is transferred once.<
 through all of its buffers. The total number of objects transferred is
 <code>iter_count * elemNumber * repeat_count</code>, which for <code>repeat_count == 1</code>
 simplifies to <code>iter_count * elemNumber</code>.</p>
-<p>Traits: <code>HasParent&lt;DeviceOp&gt;</code></p>
+<p>Traits: <code>AttrBasedSymbolVisibility</code>, <code>HasParent&lt;DeviceOp&gt;</code>, <code>SymbolName</code></p>
 <p>Interfaces: <code>Symbol</code></p>
 <h4 id="attributes_17">Attributes:<a class="headerlink" href="#attributes_17" title="Permanent link">&para;</a></h4>
 <table>
@@ -12625,7 +12655,7 @@ of a join or distribute.</p>
 <p>Example:
 <div class="highlight"><pre><span></span><code><a id="__codelineno-59-1" name="__codelineno-59-1" href="#__codelineno-59-1"></a>  aie.objectfifo.core_endpoint @reader(%tile) drains @pool
 </code></pre></div></p>
-<p>Traits: <code>HasParent&lt;DeviceOp&gt;</code></p>
+<p>Traits: <code>AttrBasedSymbolVisibility</code>, <code>HasParent&lt;DeviceOp&gt;</code>, <code>SymbolName</code></p>
 <p>Interfaces: <code>Symbol</code></p>
 <h4 id="attributes_20">Attributes:<a class="headerlink" href="#attributes_20" title="Permanent link">&para;</a></h4>
 <table>
@@ -12672,7 +12702,7 @@ and writing it down pins it.</p>
 <p>Example:
 <div class="highlight"><pre><span></span><code><a id="__codelineno-61-1" name="__codelineno-61-1" href="#__codelineno-61-1"></a>  aie.objectfifo.dma_endpoint @out(%tile) drains @pool {channelIndex = 0}
 </code></pre></div></p>
-<p>Traits: <code>HasParent&lt;DeviceOp&gt;</code></p>
+<p>Traits: <code>AttrBasedSymbolVisibility</code>, <code>HasParent&lt;DeviceOp&gt;</code>, <code>SymbolName</code></p>
 <p>Interfaces: <code>RouteEndpoint</code>, <code>Symbol</code></p>
 <h4 id="attributes_21">Attributes:<a class="headerlink" href="#attributes_21" title="Permanent link">&para;</a></h4>
 <table>
@@ -12769,7 +12799,7 @@ leaves alone whatever is already named.</p>
 <a id="__codelineno-65-6" name="__codelineno-65-6" href="#__codelineno-65-6"></a>                                produceLock = @prod, consumeLock = @cons}
 <a id="__codelineno-65-7" name="__codelineno-65-7" href="#__codelineno-65-7"></a>  }
 </code></pre></div></p>
-<p>Traits: <code>HasParent&lt;DeviceOp&gt;</code>, <code>NoTerminator</code>, <code>SingleBlock</code>, <code>SymbolTable</code></p>
+<p>Traits: <code>AttrBasedSymbolVisibility</code>, <code>HasParent&lt;DeviceOp&gt;</code>, <code>NoTerminator</code>, <code>SingleBlock</code>, <code>SymbolName</code>, <code>SymbolTable</code></p>
 <p>Interfaces: <code>Symbol</code></p>
 <h4 id="attributes_23">Attributes:<a class="headerlink" href="#attributes_23" title="Permanent link">&para;</a></h4>
 <table>
@@ -12884,7 +12914,7 @@ locks.</p>
 <p>Example:
 <div class="highlight"><pre><span></span><code><a id="__codelineno-72-1" name="__codelineno-72-1" href="#__codelineno-72-1"></a>  aie.objectfifo.segment @s0 {offset = 0 : i32, size = 16 : i32}
 </code></pre></div></p>
-<p>Traits: <code>HasParent&lt;ObjectFifoPoolOp&gt;</code></p>
+<p>Traits: <code>AttrBasedSymbolVisibility</code>, <code>HasParent&lt;ObjectFifoPoolOp&gt;</code>, <code>SymbolName</code></p>
 <p>Interfaces: <code>Symbol</code></p>
 <h4 id="attributes_26">Attributes:<a class="headerlink" href="#attributes_26" title="Permanent link">&para;</a></h4>
 <table>
@@ -12937,7 +12967,7 @@ any objectFIFO code behind it.</p>
 <a id="__codelineno-74-4" name="__codelineno-74-4" href="#__codelineno-74-4"></a>      lock_inits = array&lt;i32: 2, 0&gt;,
 <a id="__codelineno-74-5" name="__codelineno-74-5" href="#__codelineno-74-5"></a>      head_bd_ids = array&lt;i32: 5&gt;, repeat_counts = array&lt;i32: 0&gt; }
 </code></pre></div></p>
-<p>Traits: <code>AttrSizedOperandSegments</code>, <code>HasParent&lt;DeviceOp&gt;</code></p>
+<p>Traits: <code>AttrBasedSymbolVisibility</code>, <code>AttrSizedOperandSegments</code>, <code>HasParent&lt;DeviceOp&gt;</code>, <code>SymbolName</code></p>
 <p>Interfaces: <code>Symbol</code></p>
 <h4 id="attributes_27">Attributes:<a class="headerlink" href="#attributes_27" title="Permanent link">&para;</a></h4>
 <table>
@@ -13220,7 +13250,7 @@ channel instead of leaving it to allocation.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-86-1" name="__codelineno-86-1" href="#__codelineno-86-1"></a>  aie.route_endpoint @in(%shim) DMA {fifoName = &quot;in&quot;}
 <a id="__codelineno-86-2" name="__codelineno-86-2" href="#__codelineno-86-2"></a>  aie.route_endpoint @out(%tile) Core {channelIndex = 0}
 </code></pre></div></p>
-<p>Traits: <code>HasParent&lt;DeviceOp&gt;</code></p>
+<p>Traits: <code>AttrBasedSymbolVisibility</code>, <code>HasParent&lt;DeviceOp&gt;</code>, <code>SymbolName</code></p>
 <p>Interfaces: <code>RouteEndpoint</code>, <code>Symbol</code></p>
 <h4 id="attributes_34">Attributes:<a class="headerlink" href="#attributes_34" title="Permanent link">&para;</a></h4>
 <table>
@@ -13307,7 +13337,7 @@ Example:
 These instructions will execute on the configuration co-processor of the AI Engine array.</p>
 <p>Typically, these instructions include configuring the data transfers between host and AIE array on the shims.
 The input arguments are arguments passed in from the host at kernel invocation time. This may include buffers on the host.</p>
-<p>Traits: <code>HasParent&lt;DeviceOp&gt;</code>, <code>NoTerminator</code></p>
+<p>Traits: <code>AttrBasedSymbolVisibility</code>, <code>HasParent&lt;DeviceOp&gt;</code>, <code>NoTerminator</code>, <code>SymbolName</code></p>
 <p>Interfaces: <code>Symbol</code></p>
 <h4 id="attributes_36">Attributes:<a class="headerlink" href="#attributes_36" title="Permanent link">&para;</a></h4>
 <table>
@@ -13406,7 +13436,7 @@ for the DMAChannelDir and channel index, and a reference to the shim tile.</p>
 could produce the following allocation info (channel direction MM2S, channel index 1, on tile %tile00):
 <div class="highlight"><pre><span></span><code><a id="__codelineno-93-1" name="__codelineno-93-1" href="#__codelineno-93-1"></a>  aie.shim_dma_allocation @of_in_0 (%tile00, MM2S, 1)
 </code></pre></div></p>
-<p>Traits: <code>HasParent&lt;DeviceOp&gt;</code></p>
+<p>Traits: <code>AttrBasedSymbolVisibility</code>, <code>HasParent&lt;DeviceOp&gt;</code>, <code>SymbolName</code></p>
 <p>Interfaces: <code>Symbol</code></p>
 <h4 id="attributes_37">Attributes:<a class="headerlink" href="#attributes_37" title="Permanent link">&para;</a></h4>
 <table>
@@ -13531,8 +13561,7 @@ by code in its region, representing various connections</p>
 <p>Syntax:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-98-1" name="__codelineno-98-1" href="#__codelineno-98-1"></a>operation ::= `aie.tile` `(` $col `,` $row `)` attr-dict
 </code></pre></div>
-<p>This operation creates an AIE tile in the AIE array. We specify the column and the row of the tile.
-Optionally, we can specify the memory allocation scheme for the tile (basic-sequential or bank-aware).</p>
+<p>This operation creates an AIE tile in the AIE array. We specify the column and the row of the tile.</p>
 <p>A tile encompasses core module (CoreOp), memory module (MemOp), stream switch (SwitchboxOp),
 memory buffer (BufferOp), and lock (LockOp).</p>
 <p>A tile is a logical abstraction. We use a tile to establish ownership of a hardware entity.</p>
@@ -13546,7 +13575,6 @@ the AIE array proper and the PL. The South-West/Lower Right most core exists in 
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>col</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose minimum value is 0</td></tr>
 <tr><td><code>row</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose minimum value is 0</td></tr>
-<tr><td><code>allocation_scheme</code></td><td>::mlir::StringAttr</td><td>string attribute</td></tr>
 </table>
 
 <h4 id="results_18">Results:<a class="headerlink" href="#results_18" title="Permanent link">&para;</a></h4>
@@ -13586,7 +13614,7 @@ within a <code>aie.runtime_sequence</code> block.</p>
 <a id="__codelineno-100-9" name="__codelineno-100-9" href="#__codelineno-100-9"></a>  aie.trace.stop broadcast=14
 <a id="__codelineno-100-10" name="__codelineno-100-10" href="#__codelineno-100-10"></a>}
 </code></pre></div></p>
-<p>Traits: <code>HasParent&lt;DeviceOp&gt;</code>, <code>SingleBlockImplicitTerminator&lt;EndOp&gt;</code>, <code>SingleBlock</code></p>
+<p>Traits: <code>AttrBasedSymbolVisibility</code>, <code>HasParent&lt;DeviceOp&gt;</code>, <code>SingleBlockImplicitTerminator&lt;EndOp&gt;</code>, <code>SingleBlock</code>, <code>SymbolName</code></p>
 <p>Interfaces: <code>OpAsmOpInterface</code>, <code>Symbol</code></p>
 <h4 id="attributes_39">Attributes:<a class="headerlink" href="#attributes_39" title="Permanent link">&para;</a></h4>
 <table>
@@ -13700,7 +13728,7 @@ optimizations before final lowering to NPU register writes.</p>
 <a id="__codelineno-104-3" name="__codelineno-104-3" href="#__codelineno-104-3"></a>  aie.trace.reg register=&quot;Trace_Control0&quot; field=&quot;Mode&quot; value=&quot;Event-Time&quot;
 <a id="__codelineno-104-4" name="__codelineno-104-4" href="#__codelineno-104-4"></a>}
 </code></pre></div></p>
-<p>Traits: <code>HasParent&lt;DeviceOp&gt;</code>, <code>SingleBlockImplicitTerminator&lt;EndOp&gt;</code>, <code>SingleBlock</code></p>
+<p>Traits: <code>AttrBasedSymbolVisibility</code>, <code>HasParent&lt;DeviceOp&gt;</code>, <code>SingleBlockImplicitTerminator&lt;EndOp&gt;</code>, <code>SingleBlock</code>, <code>SymbolName</code></p>
 <p>Interfaces: <code>Symbol</code></p>
 <h4 id="attributes_41">Attributes:<a class="headerlink" href="#attributes_41" title="Permanent link">&para;</a></h4>
 <table>
